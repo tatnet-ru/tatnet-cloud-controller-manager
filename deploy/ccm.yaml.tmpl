@@ -1,0 +1,144 @@
+# TatNet cloud-controller-manager — injected into a managed cluster at bootstrap
+# as a Talos inline manifest. The k8s-orchestrator substitutes the __PLACEHOLDER__
+# values per-cluster (Go text/template renders {{.Field}} — this file uses
+# double-underscore tokens the orchestrator string-replaces to avoid clashing
+# with Helm/Kustomize). Only the service-lb controller runs.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tatnet-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tatnet-cloud-controller-manager
+  namespace: tatnet-system
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tatnet-ccm
+  namespace: tatnet-system
+type: Opaque
+stringData:
+  api-base: "__API_BASE__"
+  project-id: "__PROJECT_ID__"
+  cluster-id: "__CLUSTER_ID__"
+  api-key: "__API_KEY__"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tatnet-cloud-controller-manager
+rules:
+  # The service-lb controller watches Services and writes their LB status +
+  # events; it lists Nodes to compute backends. The existence reconciler shares
+  # these verbs — it lists Services cluster-wide, clears the status of one whose
+  # load balancer is gone and stamps an annotation to re-queue it — so narrowing
+  # them would silently disable the self-healing, not just the controller.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["services/status"]
+    verbs: ["patch", "update"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch", "update"]
+  # Leader election.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tatnet-cloud-controller-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tatnet-cloud-controller-manager
+subjects:
+  - kind: ServiceAccount
+    name: tatnet-cloud-controller-manager
+    namespace: tatnet-system
+---
+# The CCM's delegated authn/authz reads the extension-apiserver-authentication
+# configmap in kube-system (request-header client CA). Without this it crashes
+# on startup ("cannot get configmaps in kube-system").
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tatnet-ccm-auth-reader
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: tatnet-cloud-controller-manager
+    namespace: tatnet-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tatnet-cloud-controller-manager
+  namespace: tatnet-system
+  labels:
+    app: tatnet-cloud-controller-manager
+spec:
+  # Two replicas so leader election is actually worth running: with one
+  # replica the lease only adds restart latency.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: tatnet-cloud-controller-manager
+  template:
+    metadata:
+      labels:
+        app: tatnet-cloud-controller-manager
+    spec:
+      serviceAccountName: tatnet-cloud-controller-manager
+      priorityClassName: system-cluster-critical
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: { type: RuntimeDefault }
+      # Run on a control-plane node; tolerate the CP taints.
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
+        - key: node.kubernetes.io/not-ready
+          effect: NoSchedule
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      containers:
+        - name: ccm
+          image: "__IMAGE__"
+          args:
+            - --cloud-provider=tatnet
+            - --controllers=service-lb-controller
+            - --use-service-account-credentials=false
+            - --leader-elect=true
+            - --v=2
+          env:
+            - name: TATNET_API_BASE
+              valueFrom: { secretKeyRef: { name: tatnet-ccm, key: api-base } }
+            - name: TATNET_PROJECT_ID
+              valueFrom: { secretKeyRef: { name: tatnet-ccm, key: project-id } }
+            - name: TATNET_K8S_CLUSTER_ID
+              valueFrom: { secretKeyRef: { name: tatnet-ccm, key: cluster-id } }
+            - name: TATNET_API_KEY
+              valueFrom: { secretKeyRef: { name: tatnet-ccm, key: api-key } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
