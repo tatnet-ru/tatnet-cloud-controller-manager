@@ -1,5 +1,7 @@
 # Build the CCM statically, then ship it on distroless static.
-FROM golang:1.24 AS build
+# Пин до patch-версии, не rolling: официальный образ ставит GOTOOLCHAIN=local,
+# поэтому какой именно тулчейн приедет под плавающим тегом, решает не репозиторий.
+FROM golang:1.24.13-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

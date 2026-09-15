@@ -1,0 +1,22 @@
+name: Run Tests
+
+# Версия Go здесь та же, что в Dockerfile, а не самая свежая: образ собирается
+# с GOTOOLCHAIN=local, поэтому тулчейн новее того, что стоит в go.mod, до сборки
+# не доедет. Прогон на 1.27 зеленел бы там, где образ падает, — ровно так
+# сборка CCM и встала, когда зависимость подняла директиву go до 1.26.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.24.13'
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./... -race
