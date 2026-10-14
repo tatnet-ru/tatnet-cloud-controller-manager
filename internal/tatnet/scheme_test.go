@@ -13,6 +13,8 @@ import (
 func TestSchemeInvalidAndConflictingFailBeforeAPI(t *testing.T) {
 	for _, annotations := range []map[string]string{
 		{annScheme: "interanl"},
+		{annScheme: ""},
+		{annAWSScheme: ""},
 		{annScheme: "internal", annAWSScheme: "internet-facing"},
 	} {
 		l := &loadBalancer{}
