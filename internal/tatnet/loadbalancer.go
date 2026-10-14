@@ -271,12 +271,13 @@ type lbAnnotations struct {
 // failing here would wedge the Service on a typo.
 func (l *loadBalancer) parseAnnotations(service *v1.Service) lbAnnotations {
 	var a lbAnnotations
-	own, aws := service.Annotations[annScheme], service.Annotations[annAWSScheme]
+	own, ownSet := service.Annotations[annScheme]
+	aws, awsSet := service.Annotations[annAWSScheme]
 	raw := own
-	if raw == "" {
+	if !ownSet {
 		raw = aws
 	}
-	if (own != "" && aws != "" && own != aws) || (raw != "" && raw != "internal" && raw != "internet-facing") {
+	if (ownSet && awsSet && own != aws) || ((ownSet || awsSet) && raw != "internal" && raw != "internet-facing") {
 		a.schemeError = "invalid or conflicting load balancer scheme; use internal or internet-facing"
 		l.warnf(service, "InvalidAnnotation", "%s", a.schemeError)
 	} else {
