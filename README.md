@@ -43,18 +43,18 @@ node changes — but **never with an empty node set** (that would blackhole the
 VIP; it logs + events and keeps the previous targets);
 `EnsureLoadBalancerDeleted` tears the LB down (idempotent).
 
-## Service annotations (`tatnet.ru/`)
+## Service annotations (`tatnet/`)
 
 Except for the exposure scheme (which fails closed), unknown annotation **values** raise a Warning event on the Service and are
 ignored — a typo never wedges the reconcile.
 
 | Annotation | Values | Effect |
 |---|---|---|
-| `tatnet.ru/lb-scheme` | `internal` \| `internet-facing` | Immutable exposure scheme; default `internet-facing`. AWS `service.beta.kubernetes.io/aws-load-balancer-scheme` is accepted as an alias; conflicting or invalid values fail closed. |
-| `tatnet.ru/lb-node-count` | int `1..3` | LB haproxy node count (create; later via `PATCH` — only when the annotation is set) |
-| `tatnet.ru/lb-proxy-protocol` | `v1` \| `v2` | `send_proxy` on every ccm target group |
-| `tatnet.ru/lb-health-check-path` | `/path` matching `^/[A-Za-z0-9._~/=&?-]*$` (mirrors the api schema) | `health_check: {mode: http, path}` (httpchk inside the tcp backend) |
-| `tatnet.ru/lb-stickiness` | `source_ip` | `stickiness: {type: source_ip}` |
+| `tatnet/lb-scheme` | `internal` \| `internet-facing` | Immutable exposure scheme; default `internet-facing`. AWS `service.beta.kubernetes.io/aws-load-balancer-scheme` is accepted as an alias; conflicting or invalid values fail closed. |
+| `tatnet/lb-node-count` | int `1..3` | LB haproxy node count (create; later via `PATCH` — only when the annotation is set) |
+| `tatnet/lb-proxy-protocol` | `v1` \| `v2` | `send_proxy` on every ccm target group |
+| `tatnet/lb-health-check-path` | `/path` matching `^/[A-Za-z0-9._~/=&?-]*$` (mirrors the api schema) | `health_check: {mode: http, path}` (httpchk inside the tcp backend) |
+| `tatnet/lb-stickiness` | `source_ip` | `stickiness: {type: source_ip}` |
 
 ## Port 80 and HTTP-01 certificates
 
@@ -77,7 +77,7 @@ Service off port 80.
 | `TATNET_PROJECT_ID` | the cluster's project |
 | `TATNET_K8S_CLUSTER_ID` | the managed cluster id (k8s-mode LB target) |
 | `TATNET_API_KEY` | project-scoped `tn_live_` key minted for this CCM |
-| `TATNET_LB_NODE_COUNT` | default haproxy nodes per LB (1..3, default 2; the `tatnet.ru/lb-node-count` annotation overrides per-Service) |
+| `TATNET_LB_NODE_COUNT` | default haproxy nodes per LB (1..3, default 2; the `tatnet/lb-node-count` annotation overrides per-Service) |
 | `TATNET_LB_READY_TIMEOUT` | how long one reconcile waits for the region to finish building before handing the retry back (default `30s`, `0` = never wait) |
 | `TATNET_LB_EXISTENCE_SYNC_PERIOD` | how often to re-check that every published load balancer still exists (default `5m`, `0` disables) |
 
@@ -102,7 +102,7 @@ than the one published. For each:
 1. **clears `status.loadBalancer`** — the truthful half. "No address yet" is a
    state every caller already handles; a dead address is a black hole, since
    connections time out rather than being refused.
-2. **stamps `tatnet.ru/lb-resynced-at`** — the wake-up. `needsUpdate` compares
+2. **stamps `tatnet/lb-resynced-at`** — the wake-up. `needsUpdate` compares
    annotations, and that is the only handle it offers on an object the CCM may
    touch (status is not compared, spec belongs to the owner). The write
    re-queues the Service and the service controller — still the single writer

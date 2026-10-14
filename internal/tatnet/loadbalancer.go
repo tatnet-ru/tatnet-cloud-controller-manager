@@ -14,16 +14,16 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// Service annotations (namespace tatnet.ru/) understood by the CCM. An unknown
+// Service annotations (namespace tatnet/) understood by the CCM. An unknown
 // VALUE is surfaced as a Warning event on the Service and ignored — a typo must
 // not wedge the reconcile loop.
 const (
-	annScheme          = "tatnet.ru/lb-scheme"
+	annScheme          = "tatnet/lb-scheme"
 	annAWSScheme       = "service.beta.kubernetes.io/aws-load-balancer-scheme"
-	annNodeCount       = "tatnet.ru/lb-node-count"        // int 1..3 → PATCH LB node_count
-	annProxyProtocol   = "tatnet.ru/lb-proxy-protocol"    // v1|v2 → send_proxy on every ccm TG
-	annHealthCheckPath = "tatnet.ru/lb-health-check-path" // → health_check {mode:"http", path} (httpchk in a tcp backend — canonical k8s check)
-	annStickiness      = "tatnet.ru/lb-stickiness"        // source_ip
+	annNodeCount       = "tatnet/lb-node-count"        // int 1..3 → PATCH LB node_count
+	annProxyProtocol   = "tatnet/lb-proxy-protocol"    // v1|v2 → send_proxy on every ccm TG
+	annHealthCheckPath = "tatnet/lb-health-check-path" // → health_check {mode:"http", path} (httpchk in a tcp backend — canonical k8s check)
+	annStickiness      = "tatnet/lb-stickiness"        // source_ip
 )
 
 // publicStatus values of a TatNet LB (api §5.5, projected from lb_state.phase).
@@ -255,7 +255,7 @@ func (l *loadBalancer) EnsureLoadBalancerDeleted(ctx context.Context, clusterNam
 	return l.client.Delete(ctx, lb.ID)
 }
 
-// lbAnnotations is the validated view of the tatnet.ru/* Service annotations.
+// lbAnnotations is the validated view of the tatnet/* Service annotations.
 // Zero values mean "annotation absent (or invalid and ignored)".
 type lbAnnotations struct {
 	nodeCount   int // 0 = absent

@@ -128,13 +128,14 @@ func TestConfigFor_Annotations(t *testing.T) {
 func TestParseAnnotations_Valid(t *testing.T) {
 	l := &loadBalancer{}
 	s := annotated(svc(), map[string]string{
-		annNodeCount:       "3",
-		annProxyProtocol:   "v1",
-		annHealthCheckPath: "/healthz",
-		annStickiness:      "source_ip",
+		"tatnet/lb-scheme":            "internal",
+		"tatnet/lb-node-count":        "3",
+		"tatnet/lb-proxy-protocol":    "v1",
+		"tatnet/lb-health-check-path": "/healthz",
+		"tatnet/lb-stickiness":        "source_ip",
 	})
 	got := l.parseAnnotations(s)
-	want := lbAnnotations{nodeCount: 3, sendProxy: "v1", hcPath: "/healthz", stickiness: "source_ip"}
+	want := lbAnnotations{scheme: "internal", nodeCount: 3, sendProxy: "v1", hcPath: "/healthz", stickiness: "source_ip"}
 	if got != want {
 		t.Fatalf("got %+v want %+v", got, want)
 	}
