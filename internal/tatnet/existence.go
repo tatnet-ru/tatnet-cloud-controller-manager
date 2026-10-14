@@ -13,7 +13,7 @@ import (
 
 // annResyncedAt marks a Service whose load balancer this reconciler had to
 // rebuild. It doubles as the wake-up signal — see repair.
-const annResyncedAt = "tatnet.ru/lb-resynced-at"
+const annResyncedAt = "tatnet/lb-resynced-at"
 
 // defaultExistencePeriod is how often the sweep runs when nothing overrides it.
 const defaultExistencePeriod = 5 * time.Minute
