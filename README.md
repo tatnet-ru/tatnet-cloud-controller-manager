@@ -45,11 +45,12 @@ VIP; it logs + events and keeps the previous targets);
 
 ## Service annotations (`tatnet.ru/`)
 
-Unknown annotation **values** raise a Warning event on the Service and are
+Except for the exposure scheme (which fails closed), unknown annotation **values** raise a Warning event on the Service and are
 ignored — a typo never wedges the reconcile.
 
 | Annotation | Values | Effect |
 |---|---|---|
+| `tatnet.ru/lb-scheme` | `internal` \| `internet-facing` | Immutable exposure scheme; default `internet-facing`. AWS `service.beta.kubernetes.io/aws-load-balancer-scheme` is accepted as an alias; conflicting or invalid values fail closed. |
 | `tatnet.ru/lb-node-count` | int `1..3` | LB haproxy node count (create; later via `PATCH` — only when the annotation is set) |
 | `tatnet.ru/lb-proxy-protocol` | `v1` \| `v2` | `send_proxy` on every ccm target group |
 | `tatnet.ru/lb-health-check-path` | `/path` matching `^/[A-Za-z0-9._~/=&?-]*$` (mirrors the api schema) | `health_check: {mode: http, path}` (httpchk inside the tcp backend) |
