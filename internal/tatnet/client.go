@@ -58,6 +58,7 @@ type LB struct {
 	ID        string
 	Name      string
 	Mode      string
+	Scheme    string
 	NodeCount int
 	VIP       string
 	Status    string
@@ -225,14 +226,14 @@ func (c *Client) FindByName(ctx context.Context, name string) (*LB, error) {
 
 func fromList(v *api.LoadBalancerResponse) *LB {
 	return &LB{
-		ID: v.Id, Name: v.Name, Mode: deref(v.Mode), NodeCount: v.NodeCount,
+		ID: v.Id, Name: v.Name, Mode: deref(v.Mode), NodeCount: v.NodeCount, Scheme: normalizedScheme(string(deref(v.Scheme))),
 		VIP: deref(v.Vip), Status: v.Status, StatusDetail: deref(v.StatusDetail),
 	}
 }
 
 func fromDetail(v *api.LoadBalancerDetailResponse) *LB {
 	return &LB{
-		ID: v.Id, Name: v.Name, Mode: deref(v.Mode), NodeCount: v.NodeCount,
+		ID: v.Id, Name: v.Name, Mode: deref(v.Mode), NodeCount: v.NodeCount, Scheme: normalizedScheme(string(deref(v.Scheme))),
 		VIP: deref(v.Vip), Status: v.Status, StatusDetail: deref(v.StatusDetail),
 	}
 }
@@ -243,9 +244,13 @@ func fromDetail(v *api.LoadBalancerDetailResponse) *LB {
 // The body goes as raw JSON on purpose: the config document is the CCM's own,
 // narrow view of LBConfigSpec (§5.7), and mapping it into the generated
 // wide type would put a second hand-written mirror where one was removed.
-func (c *Client) Create(ctx context.Context, name string, nodeCount int, cfg LBConfig, k8sClusterID string) (*LB, error) {
+func (c *Client) Create(ctx context.Context, name string, nodeCount int, cfg LBConfig, k8sClusterID string, schemes ...string) (*LB, error) {
+	scheme := "internet-facing"
+	if len(schemes) > 0 {
+		scheme = schemes[0]
+	}
 	body, err := json.Marshal(createReq{
-		Name: name, K8sClusterID: k8sClusterID, NodeCount: nodeCount, Config: cfg,
+		Name: name, K8sClusterID: k8sClusterID, NodeCount: nodeCount, Config: cfg, Scheme: scheme,
 	})
 	if err != nil {
 		return nil, err
@@ -325,4 +330,12 @@ type createReq struct {
 	K8sClusterID string   `json:"k8s_cluster_id"`
 	NodeCount    int      `json:"node_count,omitempty"`
 	Config       LBConfig `json:"config"`
+	Scheme       string   `json:"scheme"`
+}
+
+func normalizedScheme(s string) string {
+	if s == "" {
+		return "internet-facing"
+	}
+	return s
 }

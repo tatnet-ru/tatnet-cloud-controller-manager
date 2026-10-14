@@ -18,6 +18,8 @@ import (
 // VALUE is surfaced as a Warning event on the Service and ignored — a typo must
 // not wedge the reconcile loop.
 const (
+	annScheme          = "tatnet.ru/lb-scheme"
+	annAWSScheme       = "service.beta.kubernetes.io/aws-load-balancer-scheme"
 	annNodeCount       = "tatnet.ru/lb-node-count"        // int 1..3 → PATCH LB node_count
 	annProxyProtocol   = "tatnet.ru/lb-proxy-protocol"    // v1|v2 → send_proxy on every ccm TG
 	annHealthCheckPath = "tatnet.ru/lb-health-check-path" // → health_check {mode:"http", path} (httpchk in a tcp backend — canonical k8s check)
@@ -86,6 +88,9 @@ func (l *loadBalancer) EnsureLoadBalancer(ctx context.Context, clusterName strin
 		return nil, fmt.Errorf("no schedulable node with an InternalIP for service %s/%s", service.Namespace, service.Name)
 	}
 	ann := l.parseAnnotations(service)
+	if ann.schemeError != "" {
+		return nil, fmt.Errorf("%s", ann.schemeError)
+	}
 	cfg, err := configFor(service, ips, ann)
 	if err != nil {
 		return nil, err
@@ -100,12 +105,16 @@ func (l *loadBalancer) EnsureLoadBalancer(ctx context.Context, clusterName strin
 		if ann.nodeCount != 0 {
 			nodeCount = ann.nodeCount
 		}
-		lb, err = l.client.Create(ctx, name, nodeCount, cfg, l.k8sClusterID)
+		lb, err = l.client.Create(ctx, name, nodeCount, cfg, l.k8sClusterID, normalizedScheme(ann.scheme))
 		if err != nil {
 			l.eventOnRejected(service, err)
 			return nil, fmt.Errorf("create LB: %w", err)
 		}
 	} else {
+		if normalizedScheme(lb.Scheme) != normalizedScheme(ann.scheme) {
+			l.warnf(service, "SchemeChangeRejected", "load balancer scheme is immutable; recreate the Service to change it")
+			return nil, fmt.Errorf("load balancer scheme is immutable: recreate the Service")
+		}
 		if err := l.client.PutManagedConfig(ctx, lb.ID, cfg); err != nil {
 			l.eventOnRejected(service, err)
 			return nil, fmt.Errorf("put managed config: %w", err)
@@ -119,6 +128,12 @@ func (l *loadBalancer) EnsureLoadBalancer(ctx context.Context, clusterName strin
 		}
 	}
 
+	if normalizedScheme(lb.Scheme) != normalizedScheme(ann.scheme) {
+		// An older API may ignore an unknown create field. Do not publish it,
+		// and remove the unintended public resource rather than keep it serving.
+		_ = l.client.Delete(ctx, lb.ID)
+		return nil, fmt.Errorf("API did not honor requested load balancer scheme")
+	}
 	// Publishing the VIP is what makes the Service read as ready — and
 	// everything downstream believes it: CI waits, ingress controllers,
 	// cert-manager's HTTP-01. The VIP is allocated synchronously at create,
@@ -204,6 +219,9 @@ func (l *loadBalancer) UpdateLoadBalancer(ctx context.Context, clusterName strin
 		return nil
 	}
 	ann := l.parseAnnotations(service)
+	if ann.schemeError != "" {
+		return fmt.Errorf("%s", ann.schemeError)
+	}
 	cfg, err := configFor(service, ips, ann)
 	if err != nil {
 		return err
@@ -214,6 +232,9 @@ func (l *loadBalancer) UpdateLoadBalancer(ctx context.Context, clusterName strin
 	}
 	if lb == nil {
 		return fmt.Errorf("load balancer %q not found for update", name)
+	}
+	if normalizedScheme(lb.Scheme) != normalizedScheme(ann.scheme) {
+		return fmt.Errorf("load balancer scheme is immutable: recreate the Service")
 	}
 	if err := l.client.PutManagedConfig(ctx, lb.ID, cfg); err != nil {
 		l.eventOnRejected(service, err)
@@ -237,10 +258,12 @@ func (l *loadBalancer) EnsureLoadBalancerDeleted(ctx context.Context, clusterNam
 // lbAnnotations is the validated view of the tatnet.ru/* Service annotations.
 // Zero values mean "annotation absent (or invalid and ignored)".
 type lbAnnotations struct {
-	nodeCount  int    // 0 = absent
-	sendProxy  string // "", "v1", "v2"
-	hcPath     string // "" = plain tcp health check
-	stickiness string // "", "source_ip"
+	nodeCount   int // 0 = absent
+	scheme      string
+	schemeError string
+	sendProxy   string // "", "v1", "v2"
+	hcPath      string // "" = plain tcp health check
+	stickiness  string // "", "source_ip"
 }
 
 // parseAnnotations validates the Service annotations. Invalid values raise a
@@ -248,6 +271,17 @@ type lbAnnotations struct {
 // failing here would wedge the Service on a typo.
 func (l *loadBalancer) parseAnnotations(service *v1.Service) lbAnnotations {
 	var a lbAnnotations
+	own, aws := service.Annotations[annScheme], service.Annotations[annAWSScheme]
+	raw := own
+	if raw == "" {
+		raw = aws
+	}
+	if (own != "" && aws != "" && own != aws) || (raw != "" && raw != "internal" && raw != "internet-facing") {
+		a.schemeError = "invalid or conflicting load balancer scheme; use internal or internet-facing"
+		l.warnf(service, "InvalidAnnotation", "%s", a.schemeError)
+	} else {
+		a.scheme = raw
+	}
 	if raw, ok := service.Annotations[annNodeCount]; ok {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 || n > 3 {
