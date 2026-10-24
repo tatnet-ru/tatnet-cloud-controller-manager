@@ -114,15 +114,17 @@ type Stickiness struct {
 // addressed by client-visible name, which is what makes the declarative PUT
 // idempotent.
 type TargetGroup struct {
-	Name        string       `json:"name"`
-	TargetType  string       `json:"target_type"`    // vm|ip|app — CCM: "ip"
-	Protocol    string       `json:"protocol"`       // http|https|tcp — CCM: "tcp"
-	Port        int          `json:"port,omitempty"` // required unless target_type="app"
-	Balance     string       `json:"balance,omitempty"`
-	HealthCheck *HealthCheck `json:"health_check,omitempty"`
-	Stickiness  *Stickiness  `json:"stickiness,omitempty"`
-	SendProxy   string       `json:"send_proxy,omitempty"` // none|v1|v2
-	Targets     []Target     `json:"targets"`
+	Name             string       `json:"name"`
+	TargetType       string       `json:"target_type"`    // vm|ip|app — CCM: "ip"
+	Protocol         string       `json:"protocol"`       // http|https|tcp — CCM: "tcp"
+	Port             int          `json:"port,omitempty"` // required unless target_type="app"
+	Balance          string       `json:"balance,omitempty"`
+	HealthCheck      *HealthCheck `json:"health_check,omitempty"`
+	Stickiness       *Stickiness  `json:"stickiness,omitempty"`
+	SendProxy        string       `json:"send_proxy,omitempty"` // none|v1|v2
+	PreserveClientIP bool         `json:"preserve_client_ip,omitempty"`
+	SourceCIDRs      []string     `json:"source_cidrs,omitempty"`
+	Targets          []Target     `json:"targets"`
 }
 
 // RuleAction mirrors LBRuleAction (CCM documents use forward only).
@@ -266,7 +268,12 @@ func (c *Client) Create(ctx context.Context, name string, nodeCount int, cfg LBC
 	if resp.JSON201 == nil {
 		return nil, fmt.Errorf("tatnet api: %d returned no LB body", resp.HTTPResponse.StatusCode)
 	}
-	return fromDetail(resp.JSON201), nil
+	created := fromDetail(resp.JSON201)
+	if err := verifyClientIPContract(resp.Body, cfg); err != nil {
+		_ = c.Delete(ctx, created.ID)
+		return nil, err
+	}
+	return created, nil
 }
 
 // Get fetches one LB by id.
@@ -298,7 +305,10 @@ func (c *Client) PutManagedConfig(ctx context.Context, id string, cfg LBConfig) 
 	if err != nil {
 		return err
 	}
-	return check(resp.HTTPResponse, resp.Body)
+	if err := check(resp.HTTPResponse, resp.Body); err != nil {
+		return err
+	}
+	return verifyClientIPContract(resp.Body, cfg)
 }
 
 // PatchNodeCount changes the LB's haproxy node count (1..3).

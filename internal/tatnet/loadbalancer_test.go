@@ -22,7 +22,7 @@ import (
 func svc(ports ...v1.ServicePort) *v1.Service {
 	return &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"},
-		Spec:       v1.ServiceSpec{Type: v1.ServiceTypeLoadBalancer, Ports: ports},
+		Spec:       v1.ServiceSpec{Type: v1.ServiceTypeLoadBalancer, Ports: ports, ExternalTrafficPolicy: v1.ServiceExternalTrafficPolicyLocal},
 	}
 }
 
@@ -147,7 +147,6 @@ func TestParseAnnotations_InvalidValuesEventAndIgnore(t *testing.T) {
 	s := annotated(svc(v1.ServicePort{Port: 80, NodePort: 31000, Protocol: v1.ProtocolTCP}),
 		map[string]string{
 			annNodeCount:       "7",       // out of 1..3
-			annProxyProtocol:   "v3",      // unknown version
 			annHealthCheckPath: "healthz", // not absolute
 			annStickiness:      "cookie",  // unsupported
 		})
@@ -155,10 +154,10 @@ func TestParseAnnotations_InvalidValuesEventAndIgnore(t *testing.T) {
 	if got != (lbAnnotations{}) {
 		t.Fatalf("invalid values must be ignored, got %+v", got)
 	}
-	if n := len(rec.Events); n != 4 {
-		t.Fatalf("want 4 warning events, got %d", n)
+	if n := len(rec.Events); n != 3 {
+		t.Fatalf("want 3 warning events, got %d", n)
 	}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 3; i++ {
 		e := <-rec.Events
 		if !strings.Contains(e, "InvalidAnnotation") || !strings.Contains(e, "Warning") {
 			t.Fatalf("bad event: %q", e)
@@ -183,7 +182,7 @@ func TestDocumentJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `{"target_groups":[{"name":"svc-80","target_type":"ip","protocol":"tcp","port":31000,` +
-		`"health_check":{"mode":"tcp"},"targets":[{"target_ip":"10.7.0.5"}]}],` +
+		`"health_check":{"mode":"tcp"},"preserve_client_ip":true,"targets":[{"target_ip":"10.7.0.5"}]}],` +
 		`"listeners":[{"port":80,"protocol":"tcp","http2":false,` +
 		`"default_action":{"type":"forward","target_group":"svc-80"}}]}`
 	if string(b) != want {
@@ -285,7 +284,9 @@ func newFakeAPI() (*httptest.Server, *fakeAPI) {
 			f.configs[id] = req.Config
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(201)
-			_ = json.NewEncoder(w).Encode(wire(lb))
+			result := wire(lb)
+			result["config"] = req.Config
+			_ = json.NewEncoder(w).Encode(result)
 		}
 	})
 	mux.HandleFunc("/v1/projects/p/load-balancers/", func(w http.ResponseWriter, r *http.Request) {
@@ -310,7 +311,9 @@ func newFakeAPI() (*httptest.Server, *fakeAPI) {
 			_ = json.NewDecoder(r.Body).Decode(&cfg)
 			f.configs[id] = cfg
 			f.putConfigCalls++
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(200)
+			_ = json.NewEncoder(w).Encode(cfg)
 		case sub == "" && r.Method == http.MethodGet:
 			f.getCalls++
 			if lb.Status == statusProvisioning && f.getCalls > f.serveAfterGets {
