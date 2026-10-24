@@ -39,7 +39,7 @@ func TestInternalSchemeFromAWSAnnotationIsProvisionedAndPublished(t *testing.T) 
 			}
 			created = true
 			w.WriteHeader(201)
-			w.Write([]byte(`{"id":"lb","name":"web","scheme":"internal","vip":"10.7.0.252","node_count":2,"status":"active"}`))
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "lb", "name": "web", "scheme": "internal", "vip": "10.7.0.252", "node_count": 2, "status": "active", "config": req.Config})
 		} else if strings.HasSuffix(r.URL.Path, "/lb") {
 			w.Write([]byte(`{"id":"lb","name":"web","scheme":"internal","vip":"10.7.0.252","node_count":2,"status":"active"}`))
 		} else {

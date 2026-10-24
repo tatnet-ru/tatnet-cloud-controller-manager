@@ -20,7 +20,44 @@ Consequences:
 - The node set is delivered to `EnsureLoadBalancer(..., nodes)` by the
   controller, so the provider needs no node/instance API.
 
-## How a Service maps to a TatNet LB (L7 contract, CCM >=0.2.0)
+## Client IP and the Service network contract (CCM >=0.6.0)
+
+Ordinary TCP Services use native OVN destination NAT by default:
+`VIP:port → nodeIP:NodePort`. The client's source IP is preserved to the node;
+use `spec.externalTrafficPolicy: Local` to preserve it through Kubernetes to
+the ingress/application pod. `Cluster` may SNAT it inside Kubernetes and emits
+a `ClientIPAtNodeOnly` warning. The controller does not silently rewrite the
+owner's traffic policy.
+
+PROXY protocol remains opt-in. Enabling it globally would break applications
+that expect an ordinary TCP stream or TLS handshake. Explicitly annotated
+v1/v2 Services retain proxy mode. Native preservation does not require receiver
+trust lists of changing LB VM addresses.
+
+| Annotation | Values |
+| --- | --- |
+| `tatnet/lb-preserve-client-ip` | `true` / `false`; default true without PROXY |
+| `tatnet/lb-proxy-protocol` | `none` / `v1` / `v2` |
+| `service.beta.kubernetes.io/aws-load-balancer-proxy-protocol` | `*` selects v2 |
+| `service.beta.kubernetes.io/aws-load-balancer-target-group-attributes` | `preserve_client_ip.enabled=true/false,proxy_protocol_v2.enabled=true/false` |
+
+Conflicts, invalid values and unsupported attributes fail closed. This native
+implementation cannot combine preservation with PROXY protocol or proxy-only
+features (HTTP probes, stickiness, slow start). Select the TCP proxy explicitly
+with preservation=false when those are required.
+
+`spec.loadBalancerSourceRanges` is enforced at the worker IP and NodePort,
+including direct NodePort access. It is never silently ignored; proxy mode
+currently rejects it. Native health checks probe each traffic NodePort, so a
+Local Service's workers without local endpoints leave rotation. Each LB has
+a separately allocated private probe address, preventing ARP conflicts.
+
+Upgrade migration 00296 and the API/regional orchestrator before this CCM.
+The API response must acknowledge preservation and the exact source ranges
+before a new VIP is published. An older API that discards unknown JSON fields
+is rejected, and the unintended new LB is deleted.
+
+## How a Service maps to a TatNet LB
 
 The CCM writes one declarative document per reconcile via
 `PUT /v1/load-balancers/{id}/managed-config` — the endpoint replaces **only**

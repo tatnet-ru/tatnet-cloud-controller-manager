@@ -91,6 +91,13 @@ func (l *loadBalancer) EnsureLoadBalancer(ctx context.Context, clusterName strin
 	if ann.schemeError != "" {
 		return nil, fmt.Errorf("%s", ann.schemeError)
 	}
+	if ann.clientIPError != "" {
+		l.warnf(service, "InvalidClientIPConfig", "%s", ann.clientIPError)
+		return nil, fmt.Errorf("%s", ann.clientIPError)
+	}
+	if nativeClientIP(ann) && service.Spec.ExternalTrafficPolicy != v1.ServiceExternalTrafficPolicyLocal {
+		l.warnf(service, "ClientIPAtNodeOnly", "client IP is preserved to the node; set spec.externalTrafficPolicy=Local to preserve it to the pod")
+	}
 	cfg, err := configFor(service, ips, ann)
 	if err != nil {
 		return nil, err
@@ -222,6 +229,9 @@ func (l *loadBalancer) UpdateLoadBalancer(ctx context.Context, clusterName strin
 	if ann.schemeError != "" {
 		return fmt.Errorf("%s", ann.schemeError)
 	}
+	if ann.clientIPError != "" {
+		return fmt.Errorf("%s", ann.clientIPError)
+	}
 	cfg, err := configFor(service, ips, ann)
 	if err != nil {
 		return err
@@ -258,12 +268,14 @@ func (l *loadBalancer) EnsureLoadBalancerDeleted(ctx context.Context, clusterNam
 // lbAnnotations is the validated view of the tatnet/* Service annotations.
 // Zero values mean "annotation absent (or invalid and ignored)".
 type lbAnnotations struct {
-	nodeCount   int // 0 = absent
-	scheme      string
-	schemeError string
-	sendProxy   string // "", "v1", "v2"
-	hcPath      string // "" = plain tcp health check
-	stickiness  string // "", "source_ip"
+	nodeCount        int // 0 = absent
+	scheme           string
+	schemeError      string
+	sendProxy        string // "", "v1", "v2"
+	hcPath           string // "" = plain tcp health check
+	stickiness       string // "", "source_ip"
+	preserveClientIP *bool
+	clientIPError    string
 }
 
 // parseAnnotations validates the Service annotations. Invalid values raise a
@@ -293,7 +305,7 @@ func (l *loadBalancer) parseAnnotations(service *v1.Service) lbAnnotations {
 	}
 	if raw, ok := service.Annotations[annProxyProtocol]; ok {
 		switch raw {
-		case "v1", "v2":
+		case "none", "v1", "v2":
 			a.sendProxy = raw
 		default:
 			l.warnf(service, "InvalidAnnotation", "%s=%q: must be v1 or v2; ignoring", annProxyProtocol, raw)
@@ -313,7 +325,7 @@ func (l *loadBalancer) parseAnnotations(service *v1.Service) lbAnnotations {
 			l.warnf(service, "InvalidAnnotation", "%s=%q: only source_ip is supported; ignoring", annStickiness, raw)
 		}
 	}
-	return a
+	return parseClientIPAnnotations(service, a)
 }
 
 // eventOnRejected surfaces a 422 as a Warning event on the Service, on top of
@@ -342,6 +354,16 @@ func (l *loadBalancer) warnf(service *v1.Service, reason, format string, args ..
 // §5.7): each Service port p → tcp listener :p.Port forwarding to target group
 // "svc-<p.Port>" (target_type ip, port p.NodePort, targets = node IPs).
 func configFor(service *v1.Service, ips []string, ann lbAnnotations) (LBConfig, error) {
+	if ann.clientIPError != "" {
+		return LBConfig{}, fmt.Errorf("%s", ann.clientIPError)
+	}
+	native := nativeClientIP(ann)
+	if native && (ann.hcPath != "" || ann.stickiness != "") {
+		return LBConfig{}, fmt.Errorf("native client IP preservation requires TCP traffic-port health checks without stickiness; set tatnet/lb-preserve-client-ip=false to explicitly select the TCP proxy")
+	}
+	if !native && len(service.Spec.LoadBalancerSourceRanges) > 0 {
+		return LBConfig{}, fmt.Errorf("loadBalancerSourceRanges currently requires native client IP preservation")
+	}
 	cfg := LBConfig{TargetGroups: []TargetGroup{}, Listeners: []Listener{}}
 	for _, p := range service.Spec.Ports {
 		if p.NodePort == 0 {
@@ -358,13 +380,15 @@ func configFor(service *v1.Service, ips []string, ann lbAnnotations) (LBConfig, 
 			hc = &HealthCheck{Mode: "http", Path: ann.hcPath}
 		}
 		tg := TargetGroup{
-			Name:        tgName,
-			TargetType:  "ip",
-			Protocol:    "tcp",
-			Port:        int(p.NodePort),
-			HealthCheck: hc,
-			SendProxy:   ann.sendProxy,
-			Targets:     make([]Target, 0, len(ips)),
+			Name:             tgName,
+			TargetType:       "ip",
+			Protocol:         "tcp",
+			Port:             int(p.NodePort),
+			HealthCheck:      hc,
+			SendProxy:        ann.sendProxy,
+			PreserveClientIP: native,
+			SourceCIDRs:      append([]string(nil), service.Spec.LoadBalancerSourceRanges...),
+			Targets:          make([]Target, 0, len(ips)),
 		}
 		if ann.stickiness != "" {
 			tg.Stickiness = &Stickiness{Type: ann.stickiness}
