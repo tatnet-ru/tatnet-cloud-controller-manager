@@ -146,8 +146,10 @@ explicit policy update. This use-only grant does not authorize Floating IP
 listing, allocation, release, VM attachment or NAT changes. A network key with
 `floating_ip:write` on the allocation is also supported by the API.
 
-This branch pins SDK `v0.16.3-rc.1`, a prerelease of the generated reserved-IP
-contract. The server changes must be deployed before enabling this annotation.
+CCM uses stable SDK `v0.17.0` for the generated reserved-IP contract. The
+reserved-IP API and its scoped permission are deployed. Enabling this annotation
+on an existing cluster still requires the explicit key-policy update described
+above and a separate controller rollout.
 
 ## Port 80 and HTTP-01 certificates
 

@@ -152,12 +152,6 @@ func (l *loadBalancer) EnsureLoadBalancer(ctx context.Context, clusterName strin
 		}
 	}
 
-	if normalizedScheme(lb.Scheme) != normalizedScheme(ann.scheme) {
-		// An older API may ignore an unknown create field. Do not publish it,
-		// and remove the unintended public resource rather than keep it serving.
-		_ = l.client.Delete(ctx, lb.ID)
-		return nil, fmt.Errorf("API did not honor requested load balancer scheme")
-	}
 	// Publishing the VIP is what makes the Service read as ready — and
 	// everything downstream believes it: CI waits, ingress controllers,
 	// cert-manager's HTTP-01. The VIP is allocated synchronously at create,

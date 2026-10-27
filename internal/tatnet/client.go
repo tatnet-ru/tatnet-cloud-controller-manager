@@ -272,6 +272,9 @@ func (c *Client) Create(ctx context.Context, name string, nodeCount int, cfg LBC
 		return nil, fmt.Errorf("tatnet api: %d returned no LB body", resp.HTTPResponse.StatusCode)
 	}
 	created := fromDetail(resp.JSON201)
+	if normalizedScheme(created.Scheme) != normalizedScheme(opts.Scheme) {
+		return nil, c.rejectCreate(ctx, created.ID, fmt.Errorf("API did not honor requested load balancer scheme"))
+	}
 	if err := verifyReservedIP(created, opts.FloatingIPID); err != nil {
 		return nil, c.rejectCreate(ctx, created.ID, fmt.Errorf("API did not honor requested reserved IP: %w", err))
 	}
