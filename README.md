@@ -82,16 +82,74 @@ VIP; it logs + events and keeps the previous targets);
 
 ## Service annotations (`tatnet/`)
 
-Except for the exposure scheme (which fails closed), unknown annotation **values** raise a Warning event on the Service and are
-ignored — a typo never wedges the reconcile.
+Invalid exposure, reserved-IP and client-IP settings raise a Warning event and
+fail closed. Optional tuning settings can fall back to defaults.
 
 | Annotation | Values | Effect |
 |---|---|---|
 | `tatnet/lb-scheme` | `internal` \| `internet-facing` | Immutable exposure scheme; default `internet-facing`. AWS `service.beta.kubernetes.io/aws-load-balancer-scheme` is accepted as an alias; conflicting or invalid values fail closed. |
+| `tatnet/lb-floating-ip-id` | Floating IP allocation UUID | Select an existing available public reservation at creation; immutable. Invalid values and `internal` combinations fail closed. |
 | `tatnet/lb-node-count` | int `1..3` | LB haproxy node count (create; later via `PATCH` — only when the annotation is set) |
 | `tatnet/lb-proxy-protocol` | `v1` \| `v2` | `send_proxy` on every ccm target group |
 | `tatnet/lb-health-check-path` | `/path` matching `^/[A-Za-z0-9._~/=&?-]*$` (mirrors the api schema) | `health_check: {mode: http, path}` (httpchk inside the tcp backend) |
 | `tatnet/lb-stickiness` | `source_ip` | `stickiness: {type: source_ip}` |
+
+## Stable public IP for partner allowlists
+
+Reserve a Floating IP in the cluster's account and region before creating the
+Service, then use its allocation UUID (not the literal IP address):
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: partner-webhooks
+  annotations:
+    tatnet/lb-floating-ip-id: "8c10620b-6af6-4ae2-b4bd-e69eef8fa0e8"
+    tatnet/lb-scheme: internet-facing
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  selector:
+    app: webhooks
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443
+```
+
+The annotation is create-only. Adding it to an automatically addressed LB,
+changing it, or removing it from a reserved LB returns an error and leaves the
+existing LB configuration intact. Restore the original annotation, or explicitly
+recreate the Service. Deletion is still allowed with an invalid annotation.
+
+Deletion of the Service/LB retains the account's paid IP reservation. Before
+reusing it, wait until regional teardown finishes and the Floating IP becomes
+`available`; a retry while it is still attached returns 409. Recreate the
+Service with the same allocation UUID to retain the partner-facing address.
+Omitting the annotation on a new Service preserves automatic VIP allocation.
+
+An older API may silently discard unknown request fields. The CCM requires
+`floating_ip_id` in the create response, list lookup and final readiness read
+to match the annotation. It does not publish a mismatched address. If a newly
+created LB fails this acknowledgement, CCM requests its deletion and surfaces
+any cleanup failure; an existing LB is never deleted merely because the
+annotation changed. API 403/409/422 responses raise `ReservedIPRejected` without
+falling back to automatic allocation.
+
+Rollout order: migration 00298 (regional database first), reserved-IP API,
+scoped CCM permission API, then this CCM. The API key needs
+`load_balancer:use_reserved_ip` under its `k8s_cluster:<id>` statement, in
+addition to ordinary LB actions; its creator must currently have
+`account:manage_networks`. Existing keys keep their old policies and require an
+explicit policy update. This use-only grant does not authorize Floating IP
+listing, allocation, release, VM attachment or NAT changes. A network key with
+`floating_ip:write` on the allocation is also supported by the API.
+
+CCM uses stable SDK `v0.17.0` for the generated reserved-IP contract. The
+reserved-IP API and its scoped permission are deployed. Enabling this annotation
+on an existing cluster still requires the explicit key-policy update described
+above and a separate controller rollout.
 
 ## Port 80 and HTTP-01 certificates
 
@@ -183,6 +241,9 @@ manifest at bootstrap (`deploy/ccm.yaml.tmpl`, with `__PLACEHOLDER__` tokens
 substituted per-cluster). Not applied by hand.
 
 ## Build
+
+Go 1.27.3 is pinned in `go.mod` and the Docker build image; CI reads its
+version from `go.mod`.
 
 ```
 go build ./...

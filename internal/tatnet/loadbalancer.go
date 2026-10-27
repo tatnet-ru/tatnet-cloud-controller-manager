@@ -15,9 +15,10 @@ import (
 )
 
 // Service annotations (namespace tatnet/) understood by the CCM. An unknown
-// VALUE is surfaced as a Warning event on the Service and ignored — a typo must
-// not wedge the reconcile loop.
+// VALUE is surfaced as a Warning event. Exposure, reserved-IP and client-IP
+// settings fail closed; optional tuning can fall back to defaults.
 const (
+	annFloatingIPID    = "tatnet/lb-floating-ip-id"
 	annScheme          = "tatnet/lb-scheme"
 	annAWSScheme       = "service.beta.kubernetes.io/aws-load-balancer-scheme"
 	annNodeCount       = "tatnet/lb-node-count"        // int 1..3 → PATCH LB node_count
@@ -78,6 +79,13 @@ func (l *loadBalancer) GetLoadBalancer(ctx context.Context, clusterName string, 
 	if lb == nil {
 		return nil, false, nil
 	}
+	ann := l.parseAnnotations(service)
+	if ann.reservedIPError != nil {
+		return nil, true, ann.reservedIPError
+	}
+	if err := l.checkReservedIP(service, lb, ann.floatingIPID); err != nil {
+		return nil, true, err
+	}
 	return statusFor(lb), true, nil
 }
 
@@ -88,6 +96,9 @@ func (l *loadBalancer) EnsureLoadBalancer(ctx context.Context, clusterName strin
 		return nil, fmt.Errorf("no schedulable node with an InternalIP for service %s/%s", service.Namespace, service.Name)
 	}
 	ann := l.parseAnnotations(service)
+	if ann.reservedIPError != nil {
+		return nil, ann.reservedIPError
+	}
 	if ann.schemeError != "" {
 		return nil, fmt.Errorf("%s", ann.schemeError)
 	}
@@ -112,12 +123,18 @@ func (l *loadBalancer) EnsureLoadBalancer(ctx context.Context, clusterName strin
 		if ann.nodeCount != 0 {
 			nodeCount = ann.nodeCount
 		}
-		lb, err = l.client.Create(ctx, name, nodeCount, cfg, l.k8sClusterID, normalizedScheme(ann.scheme))
+		lb, err = l.client.Create(ctx, name, nodeCount, cfg, l.k8sClusterID, CreateOptions{Scheme: ann.scheme, FloatingIPID: ann.floatingIPID})
 		if err != nil {
+			if ann.floatingIPID != "" {
+				l.warnf(service, "ReservedIPRejected", "cannot create LB with reserved IP %s: %v", ann.floatingIPID, err)
+			}
 			l.eventOnRejected(service, err)
 			return nil, fmt.Errorf("create LB: %w", err)
 		}
 	} else {
+		if err := l.checkReservedIP(service, lb, ann.floatingIPID); err != nil {
+			return nil, err
+		}
 		if normalizedScheme(lb.Scheme) != normalizedScheme(ann.scheme) {
 			l.warnf(service, "SchemeChangeRejected", "load balancer scheme is immutable; recreate the Service to change it")
 			return nil, fmt.Errorf("load balancer scheme is immutable: recreate the Service")
@@ -135,12 +152,6 @@ func (l *loadBalancer) EnsureLoadBalancer(ctx context.Context, clusterName strin
 		}
 	}
 
-	if normalizedScheme(lb.Scheme) != normalizedScheme(ann.scheme) {
-		// An older API may ignore an unknown create field. Do not publish it,
-		// and remove the unintended public resource rather than keep it serving.
-		_ = l.client.Delete(ctx, lb.ID)
-		return nil, fmt.Errorf("API did not honor requested load balancer scheme")
-	}
 	// Publishing the VIP is what makes the Service read as ready — and
 	// everything downstream believes it: CI waits, ingress controllers,
 	// cert-manager's HTTP-01. The VIP is allocated synchronously at create,
@@ -151,6 +162,9 @@ func (l *loadBalancer) EnsureLoadBalancer(ctx context.Context, clusterName strin
 	// 2 s, first byte served at 98 s — 96 seconds of "ready" that lied.
 	fresh, err := l.awaitServing(ctx, lb.ID)
 	if err != nil {
+		return nil, err
+	}
+	if err := l.checkReservedIP(service, fresh, ann.floatingIPID); err != nil {
 		return nil, err
 	}
 	return statusFor(fresh), nil
@@ -226,6 +240,9 @@ func (l *loadBalancer) UpdateLoadBalancer(ctx context.Context, clusterName strin
 		return nil
 	}
 	ann := l.parseAnnotations(service)
+	if ann.reservedIPError != nil {
+		return ann.reservedIPError
+	}
 	if ann.schemeError != "" {
 		return fmt.Errorf("%s", ann.schemeError)
 	}
@@ -242,6 +259,9 @@ func (l *loadBalancer) UpdateLoadBalancer(ctx context.Context, clusterName strin
 	}
 	if lb == nil {
 		return fmt.Errorf("load balancer %q not found for update", name)
+	}
+	if err := l.checkReservedIP(service, lb, ann.floatingIPID); err != nil {
+		return err
 	}
 	if normalizedScheme(lb.Scheme) != normalizedScheme(ann.scheme) {
 		return fmt.Errorf("load balancer scheme is immutable: recreate the Service")
@@ -266,8 +286,10 @@ func (l *loadBalancer) EnsureLoadBalancerDeleted(ctx context.Context, clusterNam
 }
 
 // lbAnnotations is the validated view of the tatnet/* Service annotations.
-// Zero values mean "annotation absent (or invalid and ignored)".
+// Zero values select defaults only when validation returned no error.
 type lbAnnotations struct {
+	floatingIPID     string
+	reservedIPError  error
 	nodeCount        int // 0 = absent
 	scheme           string
 	schemeError      string
@@ -279,8 +301,8 @@ type lbAnnotations struct {
 }
 
 // parseAnnotations validates the Service annotations. Invalid values raise a
-// Warning event and are ignored (the reconcile proceeds with defaults) —
-// failing here would wedge the Service on a typo.
+// Warning event; network identity settings fail closed, while optional tuning
+// falls back to defaults.
 func (l *loadBalancer) parseAnnotations(service *v1.Service) lbAnnotations {
 	var a lbAnnotations
 	own, ownSet := service.Annotations[annScheme]
@@ -325,6 +347,7 @@ func (l *loadBalancer) parseAnnotations(service *v1.Service) lbAnnotations {
 			l.warnf(service, "InvalidAnnotation", "%s=%q: only source_ip is supported; ignoring", annStickiness, raw)
 		}
 	}
+	a.floatingIPID, a.reservedIPError = l.parseReservedIP(service, a.scheme)
 	return parseClientIPAnnotations(service, a)
 }
 

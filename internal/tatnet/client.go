@@ -55,13 +55,14 @@ func NewClient(base, projectID, key string) (*Client, error) {
 // nor the detail response carries it, so it silently decoded to "" — and
 // nothing in the CCM read it. Generation made that visible; the field is gone.
 type LB struct {
-	ID        string
-	Name      string
-	Mode      string
-	Scheme    string
-	NodeCount int
-	VIP       string
-	Status    string
+	ID           string
+	Name         string
+	Mode         string
+	FloatingIPID string
+	Scheme       string
+	NodeCount    int
+	VIP          string
+	Status       string
 	// Why the region says what it says — surfaced verbatim when the build
 	// fails, so the Service event names the cause instead of just "error".
 	StatusDetail string
@@ -229,15 +230,21 @@ func (c *Client) FindByName(ctx context.Context, name string) (*LB, error) {
 func fromList(v *api.LoadBalancerResponse) *LB {
 	return &LB{
 		ID: v.Id, Name: v.Name, Mode: deref(v.Mode), NodeCount: v.NodeCount, Scheme: normalizedScheme(string(deref(v.Scheme))),
-		VIP: deref(v.Vip), Status: v.Status, StatusDetail: deref(v.StatusDetail),
+		FloatingIPID: deref(v.FloatingIpId), VIP: deref(v.Vip), Status: v.Status, StatusDetail: deref(v.StatusDetail),
 	}
 }
 
 func fromDetail(v *api.LoadBalancerDetailResponse) *LB {
 	return &LB{
 		ID: v.Id, Name: v.Name, Mode: deref(v.Mode), NodeCount: v.NodeCount, Scheme: normalizedScheme(string(deref(v.Scheme))),
-		VIP: deref(v.Vip), Status: v.Status, StatusDetail: deref(v.StatusDetail),
+		FloatingIPID: deref(v.FloatingIpId), VIP: deref(v.Vip), Status: v.Status, StatusDetail: deref(v.StatusDetail),
 	}
+}
+
+// CreateOptions holds the immutable network identity selected at creation.
+type CreateOptions struct {
+	Scheme       string
+	FloatingIPID string
 }
 
 // Create makes a new k8s-mode LB with the full config document in the body —
@@ -246,13 +253,9 @@ func fromDetail(v *api.LoadBalancerDetailResponse) *LB {
 // The body goes as raw JSON on purpose: the config document is the CCM's own,
 // narrow view of LBConfigSpec (§5.7), and mapping it into the generated
 // wide type would put a second hand-written mirror where one was removed.
-func (c *Client) Create(ctx context.Context, name string, nodeCount int, cfg LBConfig, k8sClusterID string, schemes ...string) (*LB, error) {
-	scheme := "internet-facing"
-	if len(schemes) > 0 {
-		scheme = schemes[0]
-	}
+func (c *Client) Create(ctx context.Context, name string, nodeCount int, cfg LBConfig, k8sClusterID string, opts CreateOptions) (*LB, error) {
 	body, err := json.Marshal(createReq{
-		Name: name, K8sClusterID: k8sClusterID, NodeCount: nodeCount, Config: cfg, Scheme: scheme,
+		Name: name, K8sClusterID: k8sClusterID, NodeCount: nodeCount, Config: cfg, Scheme: normalizedScheme(opts.Scheme), FloatingIPID: opts.FloatingIPID,
 	})
 	if err != nil {
 		return nil, err
@@ -269,9 +272,14 @@ func (c *Client) Create(ctx context.Context, name string, nodeCount int, cfg LBC
 		return nil, fmt.Errorf("tatnet api: %d returned no LB body", resp.HTTPResponse.StatusCode)
 	}
 	created := fromDetail(resp.JSON201)
+	if normalizedScheme(created.Scheme) != normalizedScheme(opts.Scheme) {
+		return nil, c.rejectCreate(ctx, created.ID, fmt.Errorf("API did not honor requested load balancer scheme"))
+	}
+	if err := verifyReservedIP(created, opts.FloatingIPID); err != nil {
+		return nil, c.rejectCreate(ctx, created.ID, fmt.Errorf("API did not honor requested reserved IP: %w", err))
+	}
 	if err := verifyClientIPContract(resp.Body, cfg); err != nil {
-		_ = c.Delete(ctx, created.ID)
-		return nil, err
+		return nil, c.rejectCreate(ctx, created.ID, err)
 	}
 	return created, nil
 }
@@ -341,6 +349,7 @@ type createReq struct {
 	NodeCount    int      `json:"node_count,omitempty"`
 	Config       LBConfig `json:"config"`
 	Scheme       string   `json:"scheme"`
+	FloatingIPID string   `json:"floating_ip_id,omitempty"`
 }
 
 func normalizedScheme(s string) string {
@@ -348,4 +357,13 @@ func normalizedScheme(s string) string {
 		return "internet-facing"
 	}
 	return s
+}
+
+// A newly created resource that violates the requested network contract must
+// never be published. Keep a failed cleanup visible so operators can remove it.
+func (c *Client) rejectCreate(ctx context.Context, id string, cause error) error {
+	if err := c.Delete(ctx, id); err != nil {
+		return fmt.Errorf("%w; cleanup of unintended LB %s failed: %v", cause, id, err)
+	}
+	return cause
 }

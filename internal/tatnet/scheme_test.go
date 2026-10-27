@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -55,5 +56,44 @@ func TestInternalSchemeFromAWSAnnotationIsProvisionedAndPublished(t *testing.T) 
 	}
 	if !created || got.Ingress[0].IP != "10.7.0.252" {
 		t.Fatalf("got=%+v created=%v", got, created)
+	}
+}
+
+func TestIgnoredSchemeDoesNotHideCleanupFailure(t *testing.T) {
+	for _, deleteStatus := range []int{http.StatusAccepted, http.StatusInternalServerError} {
+		t.Run(http.StatusText(deleteStatus), func(t *testing.T) {
+			var deletes atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.Method {
+				case http.MethodPost:
+					var req createReq
+					if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+						t.Error(err)
+						return
+					}
+					w.WriteHeader(http.StatusCreated)
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": "unintended-public-lb", "name": "web", "scheme": "internet-facing", "vip": "185.152.80.101", "status": "active", "config": req.Config})
+				case http.MethodDelete:
+					deletes.Add(1)
+					w.WriteHeader(deleteStatus)
+				default:
+					_, _ = w.Write([]byte(`{"data":[],"count":0}`))
+				}
+			}))
+			defer srv.Close()
+			l := ensureLB(t, srv)
+			service := annotated(svc(v1.ServicePort{Port: 443, NodePort: 30443}), map[string]string{annScheme: "internal"})
+			got, err := l.EnsureLoadBalancer(context.Background(), "c", service, []*v1.Node{node("10.7.0.2")})
+			if err == nil || got != nil {
+				t.Fatal("unintended public address was accepted")
+			}
+			if deletes.Load() != 1 {
+				t.Fatalf("cleanup calls=%d", deletes.Load())
+			}
+			if deleteStatus == 500 && !strings.Contains(err.Error(), "cleanup") {
+				t.Fatalf("cleanup failure hidden: %v", err)
+			}
+		})
 	}
 }
