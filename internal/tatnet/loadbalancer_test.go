@@ -279,7 +279,7 @@ func newFakeAPI() (*httptest.Server, *fakeAPI) {
 			f.nextID++
 			id := fmt.Sprintf("lb-%d", f.nextID)
 			lb := &LB{ID: id, Name: req.Name, Mode: "k8s",
-				NodeCount: req.NodeCount, VIP: "185.1.1.1", Status: "provisioning"}
+				NodeCount: req.NodeCount, FloatingIPID: req.FloatingIPID, VIP: "185.1.1.1", Status: "provisioning"}
 			f.lbs[id] = lb
 			f.configs[id] = req.Config
 			w.Header().Set("Content-Type", "application/json")
@@ -835,7 +835,7 @@ func (f *fakeAPI) dropAll() {
 func wire(lb *LB) map[string]any {
 	return map[string]any{
 		"id": lb.ID, "name": lb.Name, "mode": lb.Mode,
-		"node_count": lb.NodeCount, "vip": lb.VIP,
+		"node_count": lb.NodeCount, "vip": lb.VIP, "floating_ip_id": lb.FloatingIPID,
 		"status": lb.Status, "status_detail": lb.StatusDetail,
 		"project_id": "p", "region_id": "r", "vpc_id": "v",
 	}

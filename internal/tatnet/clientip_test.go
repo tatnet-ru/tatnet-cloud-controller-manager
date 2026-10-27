@@ -75,7 +75,7 @@ func TestOldAPICannotSilentlyDowngradeClientIP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = c.Create(context.Background(), "web", 2, LBConfig{TargetGroups: []TargetGroup{{Name: "svc-443", PreserveClientIP: true}}}, "c")
+	_, err = c.Create(context.Background(), "web", 2, LBConfig{TargetGroups: []TargetGroup{{Name: "svc-443", PreserveClientIP: true}}}, "c", CreateOptions{})
 	if err == nil || !strings.Contains(err.Error(), "did not acknowledge") || !deleted {
 		t.Fatalf("old API left a wrongly advertised LB: deleted=%v err=%v", deleted, err)
 	}
