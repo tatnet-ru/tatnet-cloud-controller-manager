@@ -240,6 +240,9 @@ substituted per-cluster). Not applied by hand.
 
 ## Build
 
+Go 1.27.3 is pinned in `go.mod` and the Docker build image; CI reads its
+version from `go.mod`.
+
 ```
 go build ./...
 go test ./...

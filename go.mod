@@ -1,6 +1,6 @@
 module github.com/tatnet-ru/tatnet-cloud-controller-manager
 
-go 1.25.0
+go 1.27.3
 
 require (
 	github.com/tatnet-ru/tatnet-go v0.16.3-rc.1
