@@ -9,6 +9,16 @@ for **managed TatNet Kubernetes**. It gives a `Service` of `type=LoadBalancer`
 an `EXTERNAL-IP` by provisioning a managed TatNet load balancer (phase B of the
 managed-LB product) in front of the cluster's NodePorts.
 
+## Supported release
+
+The supported managed-cluster release is **0.7.0**. Older CCM releases are no
+longer supported. The platform uses the same immutable release for all current
+and new managed clusters; per-cluster version exceptions are retired.
+Migration 00300 adds reserved-IP use to existing active cluster-tight CCM keys;
+new keys already include it. This does not allocate reservations or change
+existing Service addresses. Token values and unrelated permissions remain
+unchanged.
+
 ## Scope (deliberately minimal)
 
 The provider implements **only** `cloudprovider.LoadBalancer` and the CCM runs
@@ -20,7 +30,7 @@ Consequences:
 - The node set is delivered to `EnsureLoadBalancer(..., nodes)` by the
   controller, so the provider needs no node/instance API.
 
-## Client IP and the Service network contract (CCM >=0.6.0)
+## Client IP and the Service network contract
 
 Ordinary TCP Services use native OVN destination NAT by default:
 `VIP:port → nodeIP:NodePort`. The client's source IP is preserved to the node;
@@ -141,8 +151,8 @@ Rollout order: migration 00298 (regional database first), reserved-IP API,
 scoped CCM permission API, then this CCM. The API key needs
 `load_balancer:use_reserved_ip` under its `k8s_cluster:<id>` statement, in
 addition to ordinary LB actions; its creator must currently have
-`account:manage_networks`. Existing keys keep their old policies and require an
-explicit policy update. This use-only grant does not authorize Floating IP
+`account:manage_networks`. Managed-cluster keys are updated by migration 00300;
+custom installations must provide the same explicit cluster-tight grant. This use-only grant does not authorize Floating IP
 listing, allocation, release, VM attachment or NAT changes. A network key with
 `floating_ip:write` on the allocation is also supported by the API.
 
