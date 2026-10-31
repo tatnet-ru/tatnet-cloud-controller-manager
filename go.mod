@@ -3,7 +3,7 @@ module github.com/tatnet-ru/tatnet-cloud-controller-manager
 go 1.27.3
 
 require (
-	github.com/tatnet-ru/tatnet-go v0.17.0
+	github.com/tatnet-ru/tatnet-go v0.18.0
 	k8s.io/api v0.33.0
 	k8s.io/apimachinery v0.33.0
 	k8s.io/client-go v0.33.0
